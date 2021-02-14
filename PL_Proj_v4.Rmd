@@ -1,0 +1,191 @@
+---
+title: "Qualitative Activity Recognition"
+author: "Wesley Padilla"
+date: "2/14/2021"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis  
+
+The Qualitative Activity Recognition of Weight Lifting Exercises study (available at http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf) investigates three aspects that pertain to qualitative activity recognition - specifying correct execution, detecting execution mistakes, and providing feedback to the user. People regularly quantify how much of a particular activity they do but they rarely quantify how well they do it.  In this project we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts correctly and incorrectly in 5 different ways.  Our objective is to develop a machine learning model to predict the manner in which they did the exercise.  
+
+The "classe" variable in the training set is what we will predict.  Participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.  
+
+## Data Sources
+
+The training data for this project are available here:   
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv   
+
+The test data are available here:  
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv    
+
+The data for this project come from this source:   http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har   
+
+## Data Processing   
+
+```{r,echo = TRUE}
+# Load libraries
+library(caret)
+library(Hmisc)
+library(Amelia)
+library(VIM)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(randomForest)
+library(ggplot2)
+library(reshape2)
+library(corrplot)
+library(AppliedPredictiveModeling)
+```
+
+```{r,echo = TRUE}
+# Load Data and assigned NA to missing values
+trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+training <- read.csv(url(trainURL), header = TRUE, as.is = TRUE, sep = ',', na.strings = c("", "NA", "#DIV/0!"))
+testing <- read.csv(url(trainURL), header = TRUE, as.is = TRUE, sep = ',', na.strings = c("", "NA", "#DIV/0!")) 
+training$classe <- as.factor(training$classe)
+
+dim(training)
+dim(testing)
+```
+
+R output confirms there are 19,622 observations and 160 variables in the training and test data sets.  
+
+
+## Data Cleaning
+
+Many models will fail in cases where predictors have a single unique value (also known as “zero-variance predictors").  Therefore, using the nearZeroVar function to remove near zero-variance predictors.   
+```{r, echo = TRUE}
+nzv <- nearZeroVar(training)
+training <- training[, -nzv]
+testing  <- testing[, -nzv]
+dim(training)
+dim(testing)
+```
+Removing near zero-variance predictors reduced the variable count from 160 to 124.   
+
+
+After running STR function, you can see the number of variables filled with NA values. Therefore, removing those variables.
+
+```{r,echo = TRUE}
+training <- training[, colSums(is.na(training)) == 0]
+testing <- testing[, colSums(is.na(testing)) == 0]
+dim(training)
+dim(testing)
+```
+
+Removing NA variables reduced the variable count to 59.   
+
+Several variables will not be required if we are trying to predict the exercise class based on accelerometer. Top six variables are not needed for the prediction therefore removing them from the dataset.    
+
+```{r,echo = TRUE}
+# Remove variables not required from the datasets  
+training <- training[, -c(1:6)]
+testing <- testing[, -c(1:6)]
+dim(training)
+dim(testing)
+```
+
+
+Using library(VIM) to check if additional cleaning is required. Algorithm below plots NAs for each variable.  Upon inspection, it looks like missing values are not an issue anymore. 
+
+```{r, echo = FALSE}
+# Use library(VIM) to show variables with higg missing values
+aggr_plot <- aggr(training, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(training), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+```
+
+
+## Preprocessing Variables   
+
+```{r, echo = TRUE}
+v <- which(lapply(training, class) %in% "numeric")
+
+preObj <-preProcess(training[,v],method=c('knnImpute', 'center', 'scale'))
+trainAdj <- predict(preObj, training[,v])
+trainAdj$classe <- training$classe
+
+testAdj <-predict(preObj,testing[,v])
+```
+
+## Data Splitting/Cross Validation   
+
+Using function createDataPartition to create balanced splits of the data. If the y argument to this function is a factor, the random sampling occurs within each class and would preserve the overall class distribution of the data. I decided to use a 75/25 % split of the data.   
+
+```{r,echo = TRUE}
+set.seed(998)
+inTrain <- createDataPartition(y = trainAdj$classe, 
+                                  p = .75,
+                                  list = FALSE,
+                                  times = 1)
+trainClass <- trainAdj[inTrain,]
+testClass <- trainAdj[-inTrain,]
+dim(trainClass)
+dim(testClass)
+```
+
+## Machine Learning Prediction Models
+
+Using two models - decision trees with Classification and Regression Trees (CART) (using rpart function) and random forest (rf).
+
+## Model #1: CART
+
+Using CART (by default it uses 10-fold CV (cross validation)).   
+
+```{r, echo = TRUE}
+modFit_CART <- rpart(classe~., data = trainClass, method = "class")
+```
+
+Using fancyRpartPlt function from the rattle package to plot the decision tree.   
+```{r, echo = TRUE}
+fancyRpartPlot(modFit_CART)
+```
+
+```{r, echo = TRUE}
+prediction_CART <- predict(modFit_CART, trainClass, type = "class")
+confusionMatrix(prediction_CART, trainClass$classe)
+```
+Results are very poor as reflected in the overall statistics.
+
+
+## Model #2: Random Forest   
+
+Second model should perform much better than CART. Random forest models are popular due to their high accuracy rate.  
+```{r, echo = TRUE}
+modFit_rf <- randomForest(classe~., data = trainClass)
+```
+
+```{r, echo = TRUE}
+prediction_rf <- predict(modFit_rf, trainClass, type = "class")
+confusionMatrix(prediction_rf, trainClass$classe)
+```
+
+## Results and Final Model Selection
+
+Comparing overall statistics between the two models, the best performance comes from the random forest model.  Therefore, we will use it as the final model.  Using resampling, we can estimate the standard error of performance.   
+
+
+```{r, echo = TRUE}
+prediction_rf2 <- predict(modFit_rf, testClass, type = "class")
+confusionMatrix(prediction_rf2, testClass$classe)
+```
+
+Performance results are still high using the test data set, therefore, I am confident this model can predict out of sample observations with a high degree of accuracy.  Performance was better using in-sample data.
+
+Out of sample error is the error you predict with the validation data set. As you can see below, it is very low at 0.0051 or 0.51%.     
+```{r, echo = TRUE}
+missed_classification <- function(values, prediction) {
+    sum(prediction != values)/length(values)
+}
+OS_error_rate <- missed_classification(testClass$classe, prediction_rf2)
+OS_error_rate
+```
+
